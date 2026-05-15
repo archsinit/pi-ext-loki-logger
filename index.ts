@@ -26,6 +26,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const CHANNEL = "telegram";
 const SUMMARY_LIMIT = 50;
 const LOKI_RAW_LIMIT = 50;
+const THINKING_LIMIT = 120;
 const LOCAL_DIR = join(homedir(), ".pi", "logs", "loki-sessions");
 const CONFIG_DIR = join(homedir(), ".pi", "agent");
 const CONFIG_FILE = join(CONFIG_DIR, "loki-logger.json");
@@ -121,21 +122,54 @@ function cleanKeepNewestSessions() {
 	}
 }
 
+function sanitizeForLog(value: unknown): unknown {
+	if (typeof value === "string") return value;
+	if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+	if (typeof value === "bigint") return value.toString();
+	if (typeof value === "undefined") return undefined;
+	if (value instanceof Error) {
+		return {
+			name: value.name,
+			message: value.message,
+			stack: value.stack,
+		};
+	}
+	if (Array.isArray(value)) {
+		return value
+			.map((item) => sanitizeForLog(item))
+			.filter((item) => item !== undefined);
+	}
+	if (typeof value !== "object") return String(value);
+
+	const record = value as Record<string, unknown>;
+	const out: Record<string, unknown> = {};
+
+	for (const [key, current] of Object.entries(record)) {
+		const lowerKey = key.toLowerCase();
+		if (lowerKey.includes("encrypted") || key === "thinkingSignature") continue;
+
+		if (key === "thinking" && typeof current === "string") {
+			out[key] = current.length > THINKING_LIMIT ? `${current.slice(0, THINKING_LIMIT)}…` : current;
+			continue;
+		}
+
+		const next = sanitizeForLog(current);
+		if (next !== undefined) out[key] = next;
+	}
+
+	if (out.type === "thinking" && typeof out.thinking === "string") {
+		out.thinking = out.thinking.length > THINKING_LIMIT ? `${out.thinking.slice(0, THINKING_LIMIT)}…` : out.thinking;
+	}
+
+	return out;
+}
+
 function safeJson(value: unknown): string {
 	if (typeof value === "string") return value;
 
 	try {
-		return JSON.stringify(value, (_key, current) => {
+		return JSON.stringify(sanitizeForLog(value), (_key, current) => {
 			if (typeof current === "bigint") return current.toString();
-
-			if (current instanceof Error) {
-				return {
-					name: current.name,
-					message: current.message,
-					stack: current.stack,
-				};
-			}
-
 			return current;
 		});
 	} catch {
@@ -371,10 +405,6 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
-	pi.on("input", async (event, ctx) => {
-		logEvent(ctx, "input", event.source, event);
-	});
-
 	pi.on("before_agent_start", async (event, ctx) => {
 		logEvent(ctx, "system", "system", event);
 	});
@@ -393,27 +423,6 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("turn_end", async (event, ctx) => {
 		logEvent(ctx, "system", "system", event);
-	});
-
-	pi.on("message_start", async (event, ctx) => {
-		logEvent(
-			ctx,
-			messageEventTypeForRole(event.message.role),
-			event.message.role,
-			event.message,
-		);
-	});
-
-	pi.on("message_update", async (event, ctx) => {
-		logEvent(
-			ctx,
-			messageEventTypeForRole(event.message.role),
-			event.message.role,
-			{
-				message: event.message,
-				assistantMessageEvent: event.assistantMessageEvent,
-			},
-		);
 	});
 
 	pi.on("message_end", async (event, ctx) => {
