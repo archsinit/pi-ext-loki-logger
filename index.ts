@@ -315,6 +315,7 @@ function logEvent(
 	const raw = safeJson(payload);
 	const messageText = extractMessageText(payload);
 	const displayText = messageText ?? raw;
+	const shouldPushToLoki = !(eventType === "system" && role === "system");
 
 	const entry: LogShape = {
 		ts: nowIso(),
@@ -333,7 +334,7 @@ function logEvent(
 
 	appendLocal(sessionId, entry);
 
-	if (config) {
+	if (config && shouldPushToLoki) {
 		void pushToLoki(config, entry).catch(() => {});
 	}
 }
