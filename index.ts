@@ -153,8 +153,8 @@ function nowNs(): string {
 	return `${BigInt(Date.now()) * 1_000_000n}`;
 }
 
-function getModelId(ctx: { getModel: () => { id?: string } | undefined }): string {
-	return ctx.getModel()?.id ?? "unknown";
+function getModelId(ctx: { model?: { id?: string } } & { getModel?: () => { id?: string } | undefined }): string {
+	return ctx.model?.id ?? ctx.getModel?.()?.id ?? "unknown";
 }
 
 function messageEventTypeForRole(role: string | undefined): string {
@@ -221,7 +221,8 @@ function appendLocal(sessionId: string, entry: LogShape) {
 
 function logEvent(
 	ctx: {
-		getModel: () => { id?: string } | undefined;
+		model?: { id?: string };
+		getModel?: () => { id?: string } | undefined;
 		sessionManager: { getSessionId: () => string };
 	},
 	eventType: string,
