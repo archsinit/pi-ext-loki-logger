@@ -63,9 +63,6 @@ function ensurePrivateDir(path: string) {
 	}
 }
 
-function safeFilePart(value: string): string {
-	return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
-}
 
 function readConfig(): LokiConfig | undefined {
 	if (!existsSync(CONFIG_FILE)) return undefined;
@@ -200,8 +197,7 @@ async function pushToLoki(config: LokiConfig, entry: LogShape) {
 
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
-		Authorization: `Bearer ${config.authToken}`,
-		"X-Scope-OrgID": config.userId,
+		Authorization: `Basic ${Buffer.from(`${config.userId}:${config.authToken}`).toString("base64")}`,
 	};
 
 	const res = await fetch(config.url, {
@@ -218,8 +214,7 @@ async function pushToLoki(config: LokiConfig, entry: LogShape) {
 function appendLocal(sessionId: string, entry: LogShape) {
 	ensurePrivateDir(LOCAL_DIR);
 
-	const safeSessionId = safeFilePart(sessionId);
-	const file = join(LOCAL_DIR, `${safeSessionId}.jsonl`);
+	const file = join(LOCAL_DIR, `${sessionId}.jsonl`);
 
 	appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
 }
