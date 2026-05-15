@@ -44,6 +44,7 @@ type LogShape = {
 	model: string;
 	event_type: string;
 	role: string;
+	preview: string;
 	raw: string;
 	summary: string;
 	chars: number;
@@ -145,6 +146,10 @@ function summarize(raw: string): string {
 	return raw.replace(/\s+/g, " ").slice(0, SUMMARY_LIMIT);
 }
 
+function previewText(raw: string): string {
+	return raw.replace(/\s+/g, " ").slice(0, LOKI_RAW_LIMIT);
+}
+
 function nowIso() {
 	return new Date().toISOString();
 }
@@ -244,6 +249,7 @@ function logEvent(
 		model: getModelId(ctx),
 		event_type: eventType,
 		role,
+		preview: previewText(raw),
 		raw,
 		summary: summarize(raw),
 		chars: raw.length,
