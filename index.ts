@@ -165,6 +165,10 @@ function messageEventTypeForRole(role: string | undefined): string {
 	return "system";
 }
 
+function normalizeLokiUrl(url: string): string {
+	return url.endsWith("/loki/api/v1/push") ? url : `${url.replace(/\/$/, "")}/loki/api/v1/push`;
+}
+
 function toLokiEntry(entry: LogShape): LogShape {
 	const truncatedRaw = entry.raw.slice(0, LOKI_RAW_LIMIT);
 
@@ -200,7 +204,7 @@ async function pushToLoki(config: LokiConfig, entry: LogShape) {
 		Authorization: `Basic ${Buffer.from(`${config.userId}:${config.authToken}`).toString("base64")}`,
 	};
 
-	const res = await fetch(config.url, {
+	const res = await fetch(normalizeLokiUrl(config.url), {
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
