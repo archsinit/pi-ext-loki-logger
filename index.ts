@@ -1,16 +1,31 @@
 /**
  * Loki logger extension.
  * Zones: pi agent, logging, storage
- * Logs Pi session events to per-session JSONL locally and pushes short summaries to Loki.
+ * Logs Pi session events to per-session JSONL locally and pushes truncated entries to Loki.
+ *
+ * Local logs: full raw payload.
+ * Loki logs: truncated raw only. No complete raw payload.
  */
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	renameSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const CHANNEL = "telegram";
 const SUMMARY_LIMIT = 50;
+const LOKI_RAW_LIMIT = 50;
 const LOCAL_DIR = join(homedir(), ".pi", "logs", "loki-sessions");
 const CONFIG_DIR = join(homedir(), ".pi", "agent");
 const CONFIG_FILE = join(CONFIG_DIR, "loki-logger.json");
@@ -39,11 +54,26 @@ function ensureDir(path: string) {
 	mkdirSync(path, { recursive: true });
 }
 
+function ensurePrivateDir(path: string) {
+	mkdirSync(path, { recursive: true, mode: 0o700 });
+	try {
+		chmodSync(path, 0o700);
+	} catch {
+		// ignore
+	}
+}
+
+function safeFilePart(value: string): string {
+	return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+}
+
 function readConfig(): LokiConfig | undefined {
 	if (!existsSync(CONFIG_FILE)) return undefined;
+
 	try {
 		const data = JSON.parse(readFileSync(CONFIG_FILE, "utf8")) as Partial<LokiConfig>;
 		if (!data.url || !data.authToken || !data.userId) return undefined;
+
 		return {
 			url: data.url,
 			authToken: data.authToken,
@@ -55,10 +85,12 @@ function readConfig(): LokiConfig | undefined {
 }
 
 function writeConfig(config: LokiConfig) {
-	ensureDir(CONFIG_DIR);
+	ensurePrivateDir(CONFIG_DIR);
+
 	const tmpFile = join(CONFIG_DIR, `.loki-logger.${Date.now()}.tmp`);
 	writeFileSync(tmpFile, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 	renameSync(tmpFile, CONFIG_FILE);
+
 	try {
 		chmodSync(CONFIG_FILE, 0o600);
 	} catch {
@@ -67,12 +99,17 @@ function writeConfig(config: LokiConfig) {
 }
 
 function cleanKeepNewestSessions() {
-	ensureDir(LOCAL_DIR);
+	ensurePrivateDir(LOCAL_DIR);
+
 	const files = readdirSync(LOCAL_DIR)
 		.filter((name) => name.endsWith(".jsonl"))
-		.map((name) => {
-			const file = join(LOCAL_DIR, name);
-			return { file, mtimeMs: statSync(file).mtimeMs };
+		.flatMap((name) => {
+			try {
+				const file = join(LOCAL_DIR, name);
+				return [{ file, mtimeMs: statSync(file).mtimeMs }];
+			} catch {
+				return [];
+			}
 		})
 		.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
@@ -87,9 +124,11 @@ function cleanKeepNewestSessions() {
 
 function safeJson(value: unknown): string {
 	if (typeof value === "string") return value;
+
 	try {
 		return JSON.stringify(value, (_key, current) => {
 			if (typeof current === "bigint") return current.toString();
+
 			if (current instanceof Error) {
 				return {
 					name: current.name,
@@ -97,6 +136,7 @@ function safeJson(value: unknown): string {
 					stack: current.stack,
 				};
 			}
+
 			return current;
 		});
 	} catch {
@@ -120,7 +160,7 @@ function getModelId(ctx: { getModel: () => { id?: string } | undefined }): strin
 	return ctx.getModel()?.id ?? "unknown";
 }
 
-function classifyRole(role: string | undefined): string {
+function messageEventTypeForRole(role: string | undefined): string {
 	const value = String(role ?? "system");
 	if (value === "assistant") return "output";
 	if (value === "user") return "input";
@@ -128,19 +168,32 @@ function classifyRole(role: string | undefined): string {
 	return "system";
 }
 
+function toLokiEntry(entry: LogShape): LogShape {
+	const truncatedRaw = entry.raw.slice(0, LOKI_RAW_LIMIT);
+
+	return {
+		...entry,
+		raw: truncatedRaw,
+		summary: truncatedRaw.replace(/\s+/g, " "),
+		chars: entry.raw.length,
+		truncated: entry.raw.length > LOKI_RAW_LIMIT,
+	};
+}
+
 async function pushToLoki(config: LokiConfig, entry: LogShape) {
+	const lokiEntry = toLokiEntry(entry);
+
 	const body = {
 		streams: [
 			{
 				stream: {
 					app: "pi",
-					channel: entry.channel,
-					event_type: entry.event_type,
-					role: entry.role,
-					model: entry.model,
-					user_id: config.userId,
+					channel: lokiEntry.channel,
+					event_type: lokiEntry.event_type,
+					role: lokiEntry.role,
+					model: lokiEntry.model,
 				},
-				values: [[nowNs(), JSON.stringify(entry)]],
+				values: [[nowNs(), JSON.stringify(lokiEntry)]],
 			},
 		],
 	};
@@ -151,26 +204,39 @@ async function pushToLoki(config: LokiConfig, entry: LogShape) {
 		"X-Scope-OrgID": config.userId,
 	};
 
-	await fetch(config.url, {
+	const res = await fetch(config.url, {
 		method: "POST",
 		headers,
 		body: JSON.stringify(body),
 	});
+
+	if (!res.ok) {
+		throw new Error(`Loki push failed: ${res.status} ${res.statusText}`);
+	}
 }
 
 function appendLocal(sessionId: string, entry: LogShape) {
-	ensureDir(LOCAL_DIR);
-	const file = join(LOCAL_DIR, `${sessionId}.jsonl`);
+	ensurePrivateDir(LOCAL_DIR);
+
+	const safeSessionId = safeFilePart(sessionId);
+	const file = join(LOCAL_DIR, `${safeSessionId}.jsonl`);
+
 	appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
 }
 
-function logEvent(ctx: {
-	getModel: () => { id?: string } | undefined;
-	sessionManager: { getSessionId: () => string };
-}, eventType: string, role: string, payload: unknown) {
+function logEvent(
+	ctx: {
+		getModel: () => { id?: string } | undefined;
+		sessionManager: { getSessionId: () => string };
+	},
+	eventType: string,
+	role: string,
+	payload: unknown,
+) {
 	const config = readConfig();
 	const sessionId = ctx.sessionManager.getSessionId();
 	const raw = safeJson(payload);
+
 	const entry: LogShape = {
 		ts: nowIso(),
 		session_id: sessionId,
@@ -185,6 +251,7 @@ function logEvent(ctx: {
 	};
 
 	appendLocal(sessionId, entry);
+
 	if (config) {
 		void pushToLoki(config, entry).catch(() => {});
 	}
@@ -196,23 +263,29 @@ export default function (pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			const current = readConfig();
 
-			const urlInput = (await ctx.ui.input(
-				"Loki push URL",
-				current?.url ?? "https://loki.example.com/loki/api/v1/push",
-			))?.trim();
-			const authInput = (await ctx.ui.input(
-				"Auth token",
-				current?.authToken ?? "paste token",
-			))?.trim();
-			const userInput = (await ctx.ui.input(
-				"User ID",
-				current?.userId ?? "tenant or user id",
-			))?.trim();
+			const urlInput = (
+				await ctx.ui.input(
+					"Loki push URL",
+					current?.url ?? "https://loki.example.com/loki/api/v1/push",
+				)
+			)?.trim();
+
+			const authInput = (await ctx.ui.input("Auth token", ""))?.trim();
+
+			const userInput = (
+				await ctx.ui.input(
+					"Tenant / user ID",
+					current?.userId ?? "tenant or user id",
+				)
+			)?.trim();
 
 			const url = urlInput || current?.url;
 			const authToken = authInput || current?.authToken;
 			const userId = userInput || current?.userId;
-			if (!url || !authToken || !userId) return ctx.ui.notify("Need URL, token, user id.", "warning");
+
+			if (!url || !authToken || !userId) {
+				return ctx.ui.notify("Need URL, token, user id.", "warning");
+			}
 
 			writeConfig({ url, authToken, userId });
 			ctx.ui.notify(`Loki saved: ${CONFIG_FILE}`, "success");
@@ -223,20 +296,23 @@ export default function (pi: ExtensionAPI) {
 		description: "Show Loki logger status",
 		handler: async (_args, ctx) => {
 			const current = readConfig();
+
 			if (!current) {
 				ctx.ui.notify("Loki off. Run /loki-setup.", "info");
 				return;
 			}
+
 			ctx.ui.notify(`Loki on. Local: ${LOCAL_DIR}`, "info");
 		},
 	});
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
 		cleanKeepNewestSessions();
+
 		logEvent(ctx, "system", "system", {
 			event: "session_start",
-			reason: _event.reason,
-			previousSessionFile: _event.previousSessionFile,
+			reason: event.reason,
+			previousSessionFile: event.previousSessionFile,
 		});
 	});
 
@@ -273,18 +349,33 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("message_start", async (event, ctx) => {
-		logEvent(ctx, classifyRole(event.message.role), event.message.role, event.message);
+		logEvent(
+			ctx,
+			messageEventTypeForRole(event.message.role),
+			event.message.role,
+			event.message,
+		);
 	});
 
 	pi.on("message_update", async (event, ctx) => {
-		logEvent(ctx, classifyRole(event.message.role), event.message.role, {
-			message: event.message,
-			assistantMessageEvent: event.assistantMessageEvent,
-		});
+		logEvent(
+			ctx,
+			messageEventTypeForRole(event.message.role),
+			event.message.role,
+			{
+				message: event.message,
+				assistantMessageEvent: event.assistantMessageEvent,
+			},
+		);
 	});
 
 	pi.on("message_end", async (event, ctx) => {
-		logEvent(ctx, classifyRole(event.message.role), event.message.role, event.message);
+		logEvent(
+			ctx,
+			messageEventTypeForRole(event.message.role),
+			event.message.role,
+			event.message,
+		);
 	});
 
 	pi.on("tool_execution_start", async (event, ctx) => {
