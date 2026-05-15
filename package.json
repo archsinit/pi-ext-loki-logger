@@ -1,0 +1,14 @@
+{
+  "name": "pi-ext-loki-logger",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "keywords": ["pi-package"],
+  "description": "Pi extension that logs sessions locally and sends short summaries to Loki",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
