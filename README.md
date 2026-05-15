@@ -4,7 +4,7 @@ Pi extension for session logging.
 
 ## Behavior
 - Local JSONL per session
-- Loki gets 50-char summary only
+- Loki gets preview only
 - Session retention keeps 50 newest files
 - Commands: `/loki-setup`, `/loki-status`
 - Auth: Basic (`username` + token)

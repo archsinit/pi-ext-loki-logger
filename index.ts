@@ -46,6 +46,7 @@ type LogShape = {
 	role: string;
 	preview: string;
 	raw: string;
+	message_text?: string;
 	summary: string;
 	chars: number;
 	truncated: boolean;
@@ -150,6 +151,41 @@ function previewText(raw: string): string {
 	return raw.replace(/\s+/g, " ").slice(0, LOKI_RAW_LIMIT);
 }
 
+function extractMessageText(value: unknown): string | undefined {
+	if (typeof value === "string") return value.trim() || undefined;
+
+	if (Array.isArray(value)) {
+		const parts = value
+			.map((item) => extractMessageText(item))
+			.filter((part): part is string => Boolean(part));
+
+		return parts.length ? parts.join(" ").trim() || undefined : undefined;
+	}
+
+	if (!value || typeof value !== "object") return undefined;
+
+	const record = value as Record<string, unknown>;
+
+	if (record.type === "text" && typeof record.text === "string") {
+		return record.text.trim() || undefined;
+	}
+
+	if (typeof record.text === "string" && record.text.trim()) {
+		return record.text.trim();
+	}
+
+	if (typeof record.content === "string" && record.content.trim()) {
+		return record.content.trim();
+	}
+
+	for (const key of ["content", "message", "messages", "payload", "delta", "output", "result"] as const) {
+		const extracted = extractMessageText(record[key]);
+		if (extracted) return extracted;
+	}
+
+	return undefined;
+}
+
 function nowIso() {
 	return new Date().toISOString();
 }
@@ -174,15 +210,17 @@ function normalizeLokiUrl(url: string): string {
 	return url.endsWith("/loki/api/v1/push") ? url : `${url.replace(/\/$/, "")}/loki/api/v1/push`;
 }
 
-function toLokiEntry(entry: LogShape): LogShape {
-	const truncatedRaw = entry.raw.slice(0, LOKI_RAW_LIMIT);
-
+function toLokiEntry(entry: LogShape): Omit<LogShape, "raw" | "message_text" | "summary"> {
 	return {
-		...entry,
-		raw: truncatedRaw,
-		summary: truncatedRaw.replace(/\s+/g, " "),
-		chars: entry.raw.length,
-		truncated: entry.raw.length > LOKI_RAW_LIMIT,
+		ts: entry.ts,
+		session_id: entry.session_id,
+		channel: entry.channel,
+		model: entry.model,
+		event_type: entry.event_type,
+		role: entry.role,
+		preview: entry.preview,
+		chars: entry.chars,
+		truncated: entry.truncated,
 	};
 }
 
@@ -241,6 +279,8 @@ function logEvent(
 	const config = readConfig();
 	const sessionId = ctx.sessionManager.getSessionId();
 	const raw = safeJson(payload);
+	const messageText = extractMessageText(payload);
+	const displayText = messageText ?? raw;
 
 	const entry: LogShape = {
 		ts: nowIso(),
@@ -249,11 +289,12 @@ function logEvent(
 		model: getModelId(ctx),
 		event_type: eventType,
 		role,
-		preview: previewText(raw),
+		preview: previewText(displayText),
 		raw,
-		summary: summarize(raw),
-		chars: raw.length,
-		truncated: raw.length > SUMMARY_LIMIT,
+		message_text: messageText,
+		summary: summarize(displayText),
+		chars: displayText.length,
+		truncated: displayText.length > SUMMARY_LIMIT,
 	};
 
 	appendLocal(sessionId, entry);
