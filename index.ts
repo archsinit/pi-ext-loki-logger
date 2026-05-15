@@ -390,39 +390,37 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (event, ctx) => {
 		cleanKeepNewestSessions();
 
-		logEvent(ctx, "system", "system", {
-			event: "session_start",
+		logEvent(ctx, "session_start", "system", {
 			reason: event.reason,
 			previousSessionFile: event.previousSessionFile,
 		});
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {
-		logEvent(ctx, "system", "system", {
-			event: "session_shutdown",
+		logEvent(ctx, "session_shutdown", "system", {
 			reason: event.reason,
 			targetSessionFile: event.targetSessionFile,
 		});
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
-		logEvent(ctx, "system", "system", event);
+		logEvent(ctx, "before_agent_start", "system", event);
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
-		logEvent(ctx, "system", "system", { event: "agent_start" });
+		logEvent(ctx, "agent_start", "system", { event: "agent_start" });
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
-		logEvent(ctx, "system", "system", event);
+		logEvent(ctx, "agent_end", "system", event);
 	});
 
 	pi.on("turn_start", async (event, ctx) => {
-		logEvent(ctx, "system", "system", event);
+		logEvent(ctx, "turn_start", "system", event);
 	});
 
 	pi.on("turn_end", async (event, ctx) => {
-		logEvent(ctx, "system", "system", event);
+		logEvent(ctx, "turn_end", "system", event);
 	});
 
 	pi.on("message_end", async (event, ctx) => {
@@ -455,19 +453,17 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_provider_request", async (event, ctx) => {
-		logEvent(ctx, "system", "system", {
-			event: "before_provider_request",
+		logEvent(ctx, "before_provider_request", "system", {
 			payload: event.payload,
 		});
 	});
 
 	pi.on("after_provider_response", async (event, ctx) => {
-		logEvent(ctx, "system", "system", event);
+		logEvent(ctx, "after_provider_response", "system", event);
 	});
 
 	pi.on("model_select", async (event, ctx) => {
-		logEvent(ctx, "system", "system", {
-			event: "model_select",
+		logEvent(ctx, "model_select", "system", {
 			model: event.model,
 			previousModel: event.previousModel,
 			source: event.source,
@@ -475,6 +471,6 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("thinking_level_select", async (event, ctx) => {
-		logEvent(ctx, "system", "system", event);
+		logEvent(ctx, "thinking_level_select", "system", event);
 	});
 }
