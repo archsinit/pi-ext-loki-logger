@@ -25,7 +25,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const CHANNEL = "telegram";
 const SUMMARY_LIMIT = 50;
-const LOKI_RAW_LIMIT = 50;
+const LOKI_RAW_LIMIT = 100;
 const THINKING_LIMIT = 120;
 const LOCAL_DIR = join(homedir(), ".pi", "logs", "loki-sessions");
 const CONFIG_DIR = join(homedir(), ".pi", "agent");
